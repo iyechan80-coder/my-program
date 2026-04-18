@@ -1,75 +1,72 @@
 import streamlit as st
+import os
 import google.generativeai as genai
-from data_engine import get_stock_data, get_exchange_rate
-from analytics import generate_analysis_prompt
+from data_engine import get_comprehensive_data, get_exchange_rate
+from analytics import generate_prompt_data_pack
 
-# 페이지 기본 설정
+# 페이지 설정
 st.set_page_config(page_title="Wonju AI Quant Lab V7.0", layout="wide")
 
+# [보안 강화] API 키 로드 (UI 입력칸 제거)
+# 로컬 테스트 시에는 .env 파일이나 OS 환경 변수를 설정하세요.
+# Streamlit Cloud에서는 Settings > Secrets에 GEMINI_API_KEY를 등록하세요.
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+
 st.title("📈 Wonju AI Quant Lab V7.0")
-st.markdown("모듈화된 데이터 엔진과 Gemini AI를 결합한 심층 퀀트 투자 분석 시스템")
+st.info("보안 정책에 따라 API Key는 시스템 내부에서 안전하게 관리됩니다.")
 
-# 사이드바: 설정 및 환율 정보
+# 사이드바: 환율 정보
 with st.sidebar:
-    st.header("⚙️ 시스템 설정")
-    api_key = st.text_input("Gemini API Key를 입력하세요", type="password")
-    st.divider()
-    
-    st.header("💱 실시간 거시 지표")
-    exchange_rate = get_exchange_rate()
-    st.metric(label="USD/KRW 환율", value=f"{exchange_rate} 원")
+    st.header("💱 실시간 환율")
+    rate = get_exchange_rate()
+    st.metric("USD/KRW", f"{rate} 원")
 
-# 메인 화면: 티커 입력
-ticker_input = st.text_input("분석할 종목 티커를 입력하세요 (예: NVDA, 005930.KS)", value="NVDA").upper()
+# 메인 UI
+ticker = st.text_input("종목 티커 입력 (예: NVDA, 005930.KS)", value="NVDA").upper()
 
-if st.button("데이터 수집 및 메트릭 확인"):
-    with st.spinner("데이터를 불러오는 중입니다..."):
-        stock_data = get_stock_data(ticker_input)
+if st.button("데이터 분석 실행"):
+    with st.spinner("퀀트 데이터를 추출 중..."):
+        full_data = get_comprehensive_data(ticker)
         
-        if "error" in stock_data:
-            st.error(stock_data["error"])
+        if "error" in full_data:
+            st.error(full_data["error"])
         else:
-            st.success("데이터 수집 완료!")
+            # 1. 주요 지표 요약 (Metrics)
+            f = full_data["fundamentals"]
+            t = full_data["technicals"]
             
-            # 메트릭 카드 레이아웃 구성
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("현재가", f"{stock_data.get('current_price', 'N/A')}")
-            col2.metric("PER", f"{stock_data.get('per', 'N/A')}")
-            col3.metric("PBR", f"{stock_data.get('pbr', 'N/A')}")
-            col4.metric("ROE", f"{stock_data.get('roe', 'N/A')} %")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("현재가", f.get("current_price"))
+            c2.metric("PER", f.get("per"))
+            c3.metric("ROE", f"{f.get('roe')}%")
+            c4.metric("RSI", t.get("rsi"))
+            c5.metric("MDD", f"{t.get('mdd')}%")
+
+            # 2. [핵심 기능] 프롬프트 데이터팩 섹션
+            st.divider()
+            st.subheader("🚀 Gemini용 데이터팩 (Prompt Data Pack)")
+            st.write("아래 코드를 복사하여 Gemini 창에 붙여넣거나, 하단 버튼을 눌러 즉시 분석하세요.")
             
-            # 데이터를 세션 스테이트에 저장하여 AI 분석 시 활용
-            st.session_state['stock_data'] = stock_data
-            st.session_state['ticker'] = ticker_input
+            data_pack_str = generate_prompt_data_pack(ticker, full_data, rate)
+            st.code(data_pack_str, language='markdown')
+            
+            # 세션 스테이트 저장
+            st.session_state['current_data_pack'] = data_pack_str
 
-st.divider()
-
-# AI 분석 섹션
-st.subheader("🤖 Gemini 심층 투자 리포트")
-
-if st.button("Gemini 분석 실행"):
-    if not api_key:
-        st.warning("사이드바에 Gemini API Key를 입력해 주세요.")
-    elif 'stock_data' not in st.session_state:
-        st.warning("먼저 '데이터 수집 및 메트릭 확인' 버튼을 눌러 데이터를 확보해 주세요.")
+# 3. 인앱 Gemini 분석
+if st.button("Gemini에게 즉시 분석 요청"):
+    if not GEMINI_API_KEY:
+        st.error("API Key가 설정되지 않았습니다. 관리자에게 문의하세요.")
+    elif 'current_data_pack' not in st.session_state:
+        st.warning("먼저 '데이터 분석 실행' 버튼을 눌러주세요.")
     else:
-        with st.spinner("Wonju AI Quant Lab 모델이 분석을 진행 중입니다..."):
-            try:
-                # Gemini API 설정
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-pro') # V7.0 성능을 위해 Pro 모델 권장
-                
-                # 프롬프트 생성 및 호출
-                prompt = generate_analysis_prompt(
-                    st.session_state['ticker'], 
-                    st.session_state['stock_data'], 
-                    exchange_rate
-                )
-                
-                response = model.generate_content(prompt)
-                
-                # 결과 출력
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            
+            with st.spinner("AI 분석 리포트 생성 중..."):
+                response = model.generate_content(st.session_state['current_data_pack'])
+                st.markdown("### 📄 AI 투자 전략 리포트")
                 st.markdown(response.text)
-                
-            except Exception as e:
-                st.error(f"AI 분석 중 오류가 발생했습니다: {str(e)}")
+        except Exception as e:
+            st.error(f"AI 호출 오류: {e}")
